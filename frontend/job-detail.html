@@ -1,0 +1,542 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Job Detail | Campus Freelance Marketplace</title>
+  <meta name="description" content="View job details, apply as a freelancer, manage applications, and submit work." />
+  <link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+
+<!-- Navbar -->
+<nav class="navbar">
+  <div class="container navbar-inner">
+    <a href="/home.html" class="navbar-brand">Campus Marketplace</a>
+    <div class="navbar-links">
+      <a href="/home.html">Jobs</a>
+      <a href="/profile.html">Profile</a>
+      <a id="admin-link" href="/admin.html" style="display:none;">Admin</a>
+    </div>
+    <div class="navbar-user">
+      <span class="navbar-wallet" id="wallet-display">Wallet: --</span>
+      <button class="btn btn-ghost btn-sm" onclick="logout()">Sign out</button>
+    </div>
+  </div>
+</nav>
+
+<main class="page">
+  <div class="container" style="max-width: 780px;">
+    <div id="alert-box"></div>
+    <div id="page-content">
+      <div class="empty-state">Loading...</div>
+    </div>
+  </div>
+</main>
+
+<!-- Apply Modal -->
+<div class="modal-overlay" id="apply-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <h2>Apply for this Job</h2>
+      <button class="modal-close" onclick="closeApplyModal()">&times;</button>
+    </div>
+    <div id="apply-alert"></div>
+    <form id="apply-form" novalidate>
+      <div class="form-group">
+        <label for="proposed-price">Your proposed price (Rs.)</label>
+        <input type="number" id="proposed-price" placeholder="0.00" min="1" step="0.01" />
+      </div>
+      <div style="display:flex; gap:8px; justify-content:flex-end; margin-top:8px;">
+        <button type="button" class="btn btn-secondary" onclick="closeApplyModal()">Cancel</button>
+        <button type="submit" class="btn btn-primary" id="apply-btn">Submit Application</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Complete Job Modal -->
+<div class="modal-overlay" id="complete-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <h2>Mark as Complete</h2>
+      <button class="modal-close" onclick="closeCompleteModal()">&times;</button>
+    </div>
+    <div id="complete-alert"></div>
+    <form id="complete-form" novalidate>
+      <div class="form-group">
+        <label>Rating</label>
+        <div id="star-picker" style="display:flex; gap:6px; margin-top:4px;">
+          <button type="button" class="star-btn" data-v="1">&#9733;</button>
+          <button type="button" class="star-btn" data-v="2">&#9733;</button>
+          <button type="button" class="star-btn" data-v="3">&#9733;</button>
+          <button type="button" class="star-btn" data-v="4">&#9733;</button>
+          <button type="button" class="star-btn" data-v="5">&#9733;</button>
+        </div>
+        <span id="star-label" class="text-xs text-muted" style="margin-top:4px; display:block;">No rating selected</span>
+      </div>
+      <div class="form-group">
+        <label for="review-text">Review (optional)</label>
+        <textarea id="review-text" rows="3" placeholder="Leave a review for the freelancer..."></textarea>
+      </div>
+      <div style="display:flex; gap:8px; justify-content:flex-end; margin-top:8px;">
+        <button type="button" class="btn btn-secondary" onclick="closeCompleteModal()">Cancel</button>
+        <button type="submit" class="btn btn-primary" id="complete-btn">Confirm &amp; Release Payment</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<style>
+  .star-btn {
+    background: none; border: none; font-size: 24px; color: #d1d5db;
+    cursor: pointer; padding: 0; transition: color 100ms;
+  }
+  .star-btn.active { color: #f59e0b; }
+  .detail-meta { display: flex; flex-wrap: wrap; gap: 20px; margin: 12px 0; }
+  .detail-meta-item { font-size: 0.875rem; }
+  .detail-meta-item .label { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); display: block; margin-bottom: 2px; }
+  .detail-meta-item .value { font-weight: 600; color: var(--text); }
+  .application-row { display: flex; align-items: center; justify-content: space-between; padding: 12px 0; border-bottom: 1px solid var(--border); gap: 12px; }
+  .application-row:last-child { border-bottom: none; }
+  .application-info { flex: 1; min-width: 0; }
+</style>
+
+<script src="/js/api.js"></script>
+<script>
+  requireAuth();
+  showAdminLink();
+
+  const params = new URLSearchParams(window.location.search);
+  const jobId = parseInt(params.get("id"));
+  const currentUser = getUser();
+  let jobData = null;
+  let selectedRating = 0;
+
+  if (!jobId) window.location.href = "/home.html";
+
+  function esc(s) {
+    if (!s) return "";
+    return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+  }
+
+  async function refreshWallet() {
+    try {
+      const me = await apiFetch("/auth/me");
+      document.getElementById("wallet-display").textContent = `Wallet: Rs.${Number(me.wallet_balance).toFixed(2)}`;
+    } catch {}
+  }
+
+  async function loadJob() {
+    try {
+      jobData = await apiFetch(`/jobs/${jobId}`);
+      renderPage(jobData);
+    } catch (err) {
+      document.getElementById("page-content").innerHTML =
+        `<div class="alert alert-error">${err.message}</div>
+         <a href="/home.html" class="btn btn-secondary" style="margin-top:12px;">Back to Jobs</a>`;
+    }
+  }
+
+  function renderPage(j) {
+    const isClient = j.viewer_is_client;
+    const contract = j.contract;
+    const submission = j.submission;
+    const rating = j.rating;
+    const myApp = j.my_application;
+
+    let html = `
+      <div style="margin-bottom:16px;">
+        <a href="/home.html" class="text-secondary text-sm" style="text-decoration:none;">&larr; Back to Jobs</a>
+      </div>
+      <div class="card" style="margin-bottom:16px;">
+        <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:12px; margin-bottom:8px;">
+          <h1 style="font-size:1.25rem;">${esc(j.title)}</h1>
+          ${statusBadge(j.status)}
+        </div>
+        <div class="detail-meta">
+          <div class="detail-meta-item">
+            <span class="label">Category</span>
+            <span class="value">${esc(j.category_name || "Uncategorized")}</span>
+          </div>
+          <div class="detail-meta-item">
+            <span class="label">Budget</span>
+            <span class="value">${formatCurrency(j.budget)}</span>
+          </div>
+          <div class="detail-meta-item">
+            <span class="label">Expected by</span>
+            <span class="value">${formatDate(j.expected_date)}</span>
+          </div>
+          <div class="detail-meta-item">
+            <span class="label">Posted by</span>
+            <span class="value">${esc(j.client_name)}</span>
+          </div>
+          <div class="detail-meta-item">
+            <span class="label">Posted on</span>
+            <span class="value">${formatDate(j.created_date)}</span>
+          </div>
+        </div>
+        <hr class="divider" style="margin:16px 0;">
+        <p style="white-space:pre-wrap; color:var(--text);">${esc(j.description || "No description provided.")}</p>
+      </div>
+    `;
+
+    // --- CONTRACT & WORK SECTION ---
+    if (contract) {
+      html += `<div class="card" style="margin-bottom:16px;">`;
+      html += `<div class="section-title">Contract</div>`;
+      html += `<div class="detail-meta">
+        <div class="detail-meta-item"><span class="label">Freelancer</span><span class="value">${esc(contract.freelancer_name)}</span></div>
+        <div class="detail-meta-item"><span class="label">Agreed Price</span><span class="value">${formatCurrency(contract.agreed_price)}</span></div>
+        <div class="detail-meta-item"><span class="label">Status</span><span class="value">${statusBadge(contract.status)}</span></div>
+        <div class="detail-meta-item"><span class="label">Start Date</span><span class="value">${formatDate(contract.start_date)}</span></div>
+        ${contract.completion_date ? `<div class="detail-meta-item"><span class="label">Completed</span><span class="value">${formatDate(contract.completion_date)}</span></div>` : ""}
+      </div>`;
+
+      // Work submission — shown to freelancer with active contract
+      if (!isClient && contract.freelancer_id === j.viewer_user_id && contract.status === "active") {
+        html += `<hr class="divider">
+          <h3 style="margin-bottom:12px;">Submit Work</h3>
+          <div id="submit-alert"></div>
+          <form id="submit-form" enctype="multipart/form-data">
+            <div class="upload-zone" id="upload-zone">
+              <input type="file" id="work-file" accept=".pdf,.jpeg,.jpg,.png,.docx" />
+              <label for="work-file" class="upload-label" id="upload-label">
+                <strong>Click to upload</strong> or drag and drop<br>
+                <span class="text-xs text-muted">PDF, JPEG, PNG, DOCX — max 10MB</span>
+              </label>
+              <div class="upload-filename" id="upload-filename" style="display:none;"></div>
+            </div>
+            <div class="form-group" style="margin-top:12px;">
+              <label for="work-notes">Notes (optional)</label>
+              <textarea id="work-notes" rows="2" placeholder="Any notes for the client..."></textarea>
+            </div>
+            <div style="margin-top:12px; text-align:right;">
+              <button type="submit" class="btn btn-primary" id="submit-btn">Submit Work</button>
+            </div>
+          </form>`;
+      }
+
+      // Submitted work display
+      if (submission) {
+        html += `<hr class="divider">
+          <h3 style="margin-bottom:8px;">Submitted Work</h3>
+          <p class="text-sm" style="color:var(--text);">File type: <strong>${esc(submission.file_type.toUpperCase())}</strong></p>
+          <p class="text-sm" style="color:var(--text);">Submitted: ${formatDate(submission.submitted_date)}</p>
+          ${submission.notes ? `<p class="text-sm" style="margin-top:6px; color:var(--text-secondary);">${esc(submission.notes)}</p>` : ""}
+          <div style="margin-top:12px;">
+            <button class="btn btn-secondary btn-sm" onclick="downloadSubmission(${contract.contract_id}, '${esc(submission.file_type)}')">📥 Download Work</button>
+          </div>`;
+      }
+
+      // Rating display
+      if (rating) {
+        html += `<hr class="divider">
+          <h3 style="margin-bottom:8px;">Rating</h3>
+          <div style="display:flex; align-items:center; gap:10px;">
+            ${starsHtml(rating.rating_score)}
+            <span class="font-semibold">${rating.rating_score}/5</span>
+          </div>
+          ${rating.review_text ? `<p class="text-sm" style="margin-top:8px; color:var(--text-secondary);">${esc(rating.review_text)}</p>` : ""}`;
+      }
+
+      // Client: mark complete button (after submission)
+      if (isClient && contract.status === "submitted" && !rating) {
+        html += `<hr class="divider">
+          <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px;">
+            <div>
+              <p class="font-semibold" style="color:var(--text);">Work has been submitted.</p>
+              <p class="text-sm">Review the work and release payment by rating the freelancer.</p>
+            </div>
+            <button class="btn btn-primary" onclick="openCompleteModal()">Mark as Complete</button>
+          </div>`;
+      }
+
+      html += `</div>`;
+    }
+
+    // --- APPLICATIONS (client view) ---
+    if (isClient && j.status === "open" && j.applications) {
+      html += `<div class="card" style="margin-bottom:16px;">
+        <div class="section-title">Applications <span style="font-weight:400; text-transform:none; font-size:0.8125rem;">(${j.applications.length})</span></div>`;
+      if (!j.applications.length) {
+        html += `<div class="empty-state" style="padding:20px 0;">No applications yet.</div>`;
+      } else {
+        j.applications.forEach(app => {
+          html += `<div class="application-row">
+            <div class="application-info">
+              <div class="font-semibold text-sm">${esc(app.freelancer_name)}</div>
+              <div class="text-xs text-muted">${starsHtml(app.freelancer_rating)} ${app.freelancer_rating.toFixed(1)} &middot; ${app.total_jobs || 0} job${app.total_jobs !== 1 ? "s" : ""} completed</div>
+              <div class="text-sm" style="margin-top:4px; color:var(--text);">Proposed: <strong>${formatCurrency(app.proposed_price)}</strong></div>
+              <div class="text-xs text-muted">Applied ${formatDate(app.applied_date)}</div>
+            </div>
+            <div style="display:flex; gap:8px; align-items:center;">
+              ${statusBadge(app.status)}
+              ${app.status === "pending" ? `
+                <button class="btn btn-primary btn-sm" onclick="acceptApp(${app.application_id})">Accept</button>
+                <button class="btn btn-danger btn-sm" onclick="rejectApp(${app.application_id})">Reject</button>
+              ` : ""}
+            </div>
+          </div>`;
+        });
+      }
+      html += `</div>`;
+
+      // Cancel job button (only if no applications)
+      if (j.applications.length === 0) {
+        html += `<div style="text-align:right;">
+          <button class="btn btn-danger btn-sm" onclick="cancelJob()">Cancel this Job</button>
+        </div>`;
+      }
+    }
+
+    // --- FREELANCER VIEW: apply / my application ---
+    if (!isClient && j.status === "open") {
+      if (myApp) {
+        html += `<div class="card alert-info" style="margin-bottom:16px;">
+          Your application: <strong>${formatCurrency(myApp.proposed_price)}</strong> &mdash; ${statusBadge(myApp.status)}
+        </div>`;
+      } else {
+        html += `<div style="margin-bottom:16px;">
+          <button class="btn btn-primary" onclick="openApplyModal()">Apply for this Job</button>
+        </div>`;
+      }
+    }
+
+    document.getElementById("page-content").innerHTML = html;
+    bindPostSubmitEvents(contract);
+  }
+
+  function bindPostSubmitEvents(contract) {
+    const form = document.getElementById("submit-form");
+    if (!form || !contract) return;
+
+    // File upload UX
+    const fileInput = document.getElementById("work-file");
+    const filenameEl = document.getElementById("upload-filename");
+    const uploadZone = document.getElementById("upload-zone");
+
+    fileInput.addEventListener("change", () => {
+      if (fileInput.files[0]) {
+        filenameEl.textContent = fileInput.files[0].name;
+        filenameEl.style.display = "block";
+        document.getElementById("upload-label").style.display = "none";
+      }
+    });
+
+    uploadZone.addEventListener("dragover", e => { e.preventDefault(); uploadZone.classList.add("dragover"); });
+    uploadZone.addEventListener("dragleave", () => uploadZone.classList.remove("dragover"));
+    uploadZone.addEventListener("drop", e => {
+      e.preventDefault();
+      uploadZone.classList.remove("dragover");
+      if (e.dataTransfer.files[0]) {
+        fileInput.files = e.dataTransfer.files;
+        filenameEl.textContent = e.dataTransfer.files[0].name;
+        filenameEl.style.display = "block";
+        document.getElementById("upload-label").style.display = "none";
+      }
+    });
+
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const submitAlert = document.getElementById("submit-alert");
+      clearAlert(submitAlert);
+
+      if (!fileInput.files || !fileInput.files[0]) {
+        showAlert(submitAlert, "Please attach your work before submitting.");
+        return;
+      }
+
+      const file = fileInput.files[0];
+      const ext = file.name.split(".").pop().toLowerCase();
+      const allowed = ["pdf","jpeg","jpg","png","docx"];
+      if (!allowed.includes(ext)) {
+        showAlert(submitAlert, "Only PDF, JPEG, PNG, and DOCX files are allowed.");
+        return;
+      }
+      if (file.size > 10 * 1024 * 1024) {
+        showAlert(submitAlert, "File size must be under 10MB.");
+        return;
+      }
+
+      const submitBtn = document.getElementById("submit-btn");
+      setLoading(submitBtn, true);
+
+      const fd = new FormData();
+      fd.append("file", file);
+      fd.append("notes", document.getElementById("work-notes").value.trim());
+
+      try {
+        await apiUpload(`/contracts/${contract.contract_id}/submit`, fd);
+        showAlert(document.getElementById("alert-box"), "Work submitted successfully.", "success");
+        await loadJob();
+      } catch (err) {
+        showAlert(submitAlert, err.message);
+      } finally {
+        setLoading(submitBtn, false, "Submit Work");
+      }
+    });
+  }
+
+  // Download submission file with authentication
+  async function downloadSubmission(contractId, fileType) {
+    try {
+      const token = getToken();
+      const headers = {};
+      if (token) headers["Authorization"] = `Bearer ${token}`;
+
+      const res = await fetch(`/contracts/${contractId}/submission/download`, { headers });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.detail || "Failed to download file.");
+      }
+
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `work_${contractId}.${fileType}`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      showAlert(document.getElementById("alert-box"), err.message);
+    }
+  }
+
+  // Apply modal
+  function openApplyModal() {
+    document.getElementById("apply-modal").classList.add("open");
+  }
+  function closeApplyModal() {
+    document.getElementById("apply-modal").classList.remove("open");
+    document.getElementById("apply-form").reset();
+    clearAlert(document.getElementById("apply-alert"));
+  }
+  document.getElementById("apply-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const applyAlert = document.getElementById("apply-alert");
+    clearAlert(applyAlert);
+    const proposed_price = parseFloat(document.getElementById("proposed-price").value);
+    if (!proposed_price || proposed_price <= 0) {
+      showAlert(applyAlert, "Proposed price must be greater than zero.");
+      return;
+    }
+    const btn = document.getElementById("apply-btn");
+    setLoading(btn, true);
+    try {
+      await apiFetch("/applications", {
+        method: "POST",
+        body: JSON.stringify({ job_id: jobId, proposed_price }),
+      });
+      closeApplyModal();
+      showAlert(document.getElementById("alert-box"), "Application submitted.", "success");
+      await loadJob();
+    } catch (err) {
+      showAlert(applyAlert, err.message);
+    } finally {
+      setLoading(btn, false, "Submit Application");
+    }
+  });
+
+  // Accept / Reject
+  async function acceptApp(appId) {
+    if (!confirm("Accept this application? The agreed price will be debited from your wallet.")) return;
+    try {
+      await apiFetch(`/applications/${appId}/accept`, { method: "PUT" });
+      showAlert(document.getElementById("alert-box"), "Application accepted. Contract created.", "success");
+      await refreshWallet();
+      await loadJob();
+    } catch (err) {
+      showAlert(document.getElementById("alert-box"), err.message);
+    }
+  }
+  async function rejectApp(appId) {
+    try {
+      await apiFetch(`/applications/${appId}/reject`, { method: "PUT" });
+      await loadJob();
+    } catch (err) {
+      showAlert(document.getElementById("alert-box"), err.message);
+    }
+  }
+
+  // Cancel job
+  async function cancelJob() {
+    if (!confirm("Cancel this job? This cannot be undone.")) return;
+    try {
+      await apiFetch(`/jobs/${jobId}`, { method: "DELETE" });
+      window.location.href = "/home.html";
+    } catch (err) {
+      showAlert(document.getElementById("alert-box"), err.message);
+    }
+  }
+
+  // Complete job / rating modal
+  function openCompleteModal() {
+    selectedRating = 0;
+    updateStars(0);
+    document.getElementById("complete-modal").classList.add("open");
+  }
+  function closeCompleteModal() {
+    document.getElementById("complete-modal").classList.remove("open");
+    document.getElementById("complete-form").reset();
+    clearAlert(document.getElementById("complete-alert"));
+  }
+
+  // Star picker
+  const starBtns = document.querySelectorAll(".star-btn");
+  const starLabel = document.getElementById("star-label");
+  const labels = ["", "Poor", "Fair", "Good", "Very good", "Excellent"];
+  function updateStars(val) {
+    starBtns.forEach(b => {
+      b.classList.toggle("active", parseInt(b.dataset.v) <= val);
+    });
+    starLabel.textContent = val > 0 ? labels[val] : "No rating selected";
+  }
+  starBtns.forEach(btn => {
+    btn.addEventListener("click", () => {
+      selectedRating = parseInt(btn.dataset.v);
+      updateStars(selectedRating);
+    });
+  });
+
+  document.getElementById("complete-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const completeAlert = document.getElementById("complete-alert");
+    clearAlert(completeAlert);
+    if (!selectedRating) {
+      showAlert(completeAlert, "Please select a star rating before completing.");
+      return;
+    }
+    const btn = document.getElementById("complete-btn");
+    setLoading(btn, true);
+    try {
+      await apiFetch(`/contracts/${jobData.contract.contract_id}/complete`, {
+        method: "POST",
+        body: JSON.stringify({ rating_score: selectedRating, review_text: document.getElementById("review-text").value.trim() }),
+      });
+      closeCompleteModal();
+      showAlert(document.getElementById("alert-box"), "Job marked complete. Payment released to freelancer.", "success");
+      await refreshWallet();
+      await loadJob();
+    } catch (err) {
+      showAlert(completeAlert, err.message);
+    } finally {
+      setLoading(btn, false, "Confirm & Release Payment");
+    }
+  });
+
+  // Close modals on backdrop click
+  ["apply-modal","complete-modal"].forEach(id => {
+    document.getElementById(id).addEventListener("click", e => {
+      if (e.target.id === id) { e.target.classList.remove("open"); }
+    });
+  });
+
+  // Init
+  refreshWallet();
+  loadJob();
+</script>
+</body>
+</html>

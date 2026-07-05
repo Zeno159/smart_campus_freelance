@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Jobs | Campus Freelance Marketplace</title>
+  <meta name="description" content="Browse open job listings and post work on the Campus Freelance Marketplace." />
+  <link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+
+<!-- Navbar -->
+<nav class="navbar">
+  <div class="container navbar-inner">
+    <a href="/home.html" class="navbar-brand">Campus Marketplace</a>
+    <div class="navbar-links">
+      <a href="/home.html">Jobs</a>
+      <a href="/profile.html">Profile</a>
+      <a id="admin-link" href="/admin.html" style="display:none;">Admin</a>
+    </div>
+    <div class="navbar-user">
+      <span class="navbar-wallet" id="wallet-display">Wallet: --</span>
+      <button class="btn btn-ghost btn-sm" onclick="logout()">Sign out</button>
+    </div>
+  </div>
+</nav>
+
+<!-- Main -->
+<main class="page">
+  <div class="container">
+
+    <!-- Page Header -->
+    <div class="page-header">
+      <div class="page-header-row">
+        <div>
+          <h1>Open Jobs</h1>
+          <p class="text-secondary text-sm" id="greeting"></p>
+        </div>
+        <button class="btn btn-primary" id="post-job-btn">Post a Job</button>
+      </div>
+    </div>
+
+    <!-- Search Row -->
+    <div style="margin-bottom: 20px;">
+      <div class="search-bar">
+        <input type="text" class="search-input" id="search-input" placeholder="Search by job title or client name..." />
+        <select class="search-select" id="category-filter">
+          <option value="">All categories</option>
+        </select>
+        <button class="btn btn-secondary" id="search-btn">Search</button>
+        <button class="btn btn-ghost" id="clear-btn">Clear</button>
+      </div>
+    </div>
+
+    <div id="alert-box"></div>
+
+    <!-- Jobs Grid -->
+    <div id="jobs-grid" class="jobs-grid">
+      <div class="empty-state">Loading jobs...</div>
+    </div>
+
+  </div>
+</main>
+
+<!-- Post Job Modal -->
+<div class="modal-overlay" id="post-job-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <h2>Post a Job</h2>
+      <button class="modal-close" id="close-modal-btn" aria-label="Close">&times;</button>
+    </div>
+    <div id="modal-alert"></div>
+    <form id="post-job-form" novalidate>
+      <div class="form-group">
+        <label for="job-title">Job title</label>
+        <input type="text" id="job-title" placeholder="What do you need done?" />
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label for="job-category">Category</label>
+          <select id="job-category"></select>
+        </div>
+        <div class="form-group">
+          <label for="job-budget">Budget (Rs.)</label>
+          <input type="number" id="job-budget" placeholder="0.00" min="1" step="0.01" />
+        </div>
+      </div>
+      <div class="form-group">
+        <label for="job-date">Expected completion date</label>
+        <input type="date" id="job-date" />
+      </div>
+      <div class="form-group">
+        <label for="job-description">Description</label>
+        <textarea id="job-description" rows="3" placeholder="Describe the work in detail..."></textarea>
+      </div>
+      <div style="display:flex; gap:8px; justify-content:flex-end; margin-top:4px;">
+        <button type="button" class="btn btn-secondary" id="cancel-modal-btn">Cancel</button>
+        <button type="submit" class="btn btn-primary" id="post-btn">Post Job</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script src="/js/api.js"></script>
+<script>
+  requireAuth();
+  showAdminLink();
+
+  const user = getUser();
+  let categories = [];
+
+  // Update wallet from profile
+  async function refreshWallet() {
+    try {
+      const me = await apiFetch("/auth/me");
+      document.getElementById("wallet-display").textContent = `Wallet: Rs.${Number(me.wallet_balance).toFixed(2)}`;
+      const stored = getUser();
+      setAuth(getToken(), { ...stored, wallet_balance: me.wallet_balance });
+    } catch {}
+  }
+
+  // Load categories
+  async function loadCategories() {
+    categories = await apiFetch("/auth/categories") || [];
+    const filters = [document.getElementById("category-filter"), document.getElementById("job-category")];
+    categories.forEach(c => {
+      filters.forEach(sel => {
+        const opt = document.createElement("option");
+        opt.value = c.category_id;
+        opt.textContent = c.category_name;
+        sel.appendChild(opt);
+      });
+    });
+  }
+
+  // Render jobs
+  function renderJobs(jobs) {
+    const grid = document.getElementById("jobs-grid");
+    if (!jobs || !jobs.length) {
+      grid.innerHTML = '<div class="empty-state">No open jobs found.</div>';
+      return;
+    }
+    grid.innerHTML = jobs.map(j => `
+      <div class="job-card" onclick="window.location.href='/job-detail.html?id=${j.job_id}'">
+        <div class="job-card-header">
+          <span class="job-card-title">${esc(j.title)}</span>
+          ${statusBadge(j.status)}
+        </div>
+        <div class="job-card-meta">
+          <span class="job-card-meta-item">${esc(j.category_name || "Uncategorized")}</span>
+          <span class="job-card-meta-item">Due ${formatDate(j.expected_date)}</span>
+          <span class="job-card-meta-item">${j.application_count} applicant${j.application_count !== 1 ? "s" : ""}</span>
+        </div>
+        <div class="job-card-footer">
+          <span class="job-card-client">
+            ${esc(j.client_name)}
+            <span style="color:var(--text-muted); margin-left:4px;">${starsHtml(j.client_rating)}</span>
+          </span>
+          <span class="job-card-budget">${formatCurrency(j.budget)}</span>
+        </div>
+      </div>
+    `).join("");
+  }
+
+  async function loadJobs(search = "", catId = "") {
+    const params = new URLSearchParams();
+    if (search) params.set("search", search);
+    if (catId) params.set("category_id", catId);
+    try {
+      const jobs = await apiFetch("/jobs?" + params.toString());
+      renderJobs(jobs);
+    } catch (err) {
+      showAlert(document.getElementById("alert-box"), err.message);
+    }
+  }
+
+  function esc(s) {
+    if (!s) return "";
+    return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+  }
+
+  // Search
+  document.getElementById("search-btn").addEventListener("click", () => {
+    const q = document.getElementById("search-input").value.trim();
+    const cat = document.getElementById("category-filter").value;
+    loadJobs(q, cat);
+  });
+  document.getElementById("search-input").addEventListener("keydown", e => {
+    if (e.key === "Enter") document.getElementById("search-btn").click();
+  });
+  document.getElementById("clear-btn").addEventListener("click", () => {
+    document.getElementById("search-input").value = "";
+    document.getElementById("category-filter").value = "";
+    loadJobs();
+  });
+
+  // Modal open/close
+  function openModal() {
+    document.getElementById("post-job-modal").classList.add("open");
+    document.getElementById("modal-alert").innerHTML = "";
+  }
+  function closeModal() {
+    document.getElementById("post-job-modal").classList.remove("open");
+    document.getElementById("post-job-form").reset();
+    document.getElementById("modal-alert").innerHTML = "";
+  }
+  document.getElementById("post-job-btn").addEventListener("click", openModal);
+  document.getElementById("close-modal-btn").addEventListener("click", closeModal);
+  document.getElementById("cancel-modal-btn").addEventListener("click", closeModal);
+  document.getElementById("post-job-modal").addEventListener("click", e => {
+    if (e.target === document.getElementById("post-job-modal")) closeModal();
+  });
+
+  // Set min date to tomorrow
+  const tomorrow = new Date();
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  document.getElementById("job-date").min = tomorrow.toISOString().split("T")[0];
+
+  // Post Job
+  document.getElementById("post-job-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const modalAlert = document.getElementById("modal-alert");
+    clearAlert(modalAlert);
+
+    const title = document.getElementById("job-title").value.trim();
+    const category_id = parseInt(document.getElementById("job-category").value);
+    const budget = parseFloat(document.getElementById("job-budget").value);
+    const expected_date = document.getElementById("job-date").value;
+    const description = document.getElementById("job-description").value.trim();
+
+    if (!title || !expected_date || !description) { showAlert(modalAlert, "All fields are required."); return; }
+    if (!budget || budget <= 0) { showAlert(modalAlert, "Budget must be greater than zero."); return; }
+    if (!expected_date) { showAlert(modalAlert, "Expected date is required."); return; }
+
+    const postBtn = document.getElementById("post-btn");
+    setLoading(postBtn, true);
+    try {
+      await apiFetch("/jobs", {
+        method: "POST",
+        body: JSON.stringify({ title, category_id, description, budget, expected_date }),
+      });
+      closeModal();
+      await refreshWallet();
+      loadJobs();
+      showAlert(document.getElementById("alert-box"), "Job posted successfully.", "success");
+      setTimeout(() => clearAlert(document.getElementById("alert-box")), 3000);
+    } catch (err) {
+      showAlert(modalAlert, err.message);
+    } finally {
+      setLoading(postBtn, false, "Post Job");
+    }
+  });
+
+  // Greeting
+  if (user) {
+    document.getElementById("greeting").textContent = `Welcome back, ${user.name}`;
+  }
+
+  // Init
+  (async () => {
+    await Promise.all([loadCategories(), refreshWallet()]);
+    loadJobs();
+  })();
+</script>
+</body>
+</html>

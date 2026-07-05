@@ -1,0 +1,499 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Profile | Campus Freelance Marketplace</title>
+  <meta name="description" content="Manage your wallet, view your jobs, applications, completed work, and services." />
+  <link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+
+<!-- Navbar -->
+<nav class="navbar">
+  <div class="container navbar-inner">
+    <a href="/home.html" class="navbar-brand">Campus Marketplace</a>
+    <div class="navbar-links">
+      <a href="/home.html">Jobs</a>
+      <a href="/profile.html">Profile</a>
+    </div>
+    <div class="navbar-user">
+      <span class="navbar-wallet" id="wallet-display">Wallet: --</span>
+      <button class="btn btn-ghost btn-sm" onclick="logout()">Sign out</button>
+    </div>
+  </div>
+</nav>
+
+<main class="page">
+  <div class="container">
+    <div id="global-alert"></div>
+    <div id="page-content"><div class="empty-state">Loading...</div></div>
+  </div>
+</main>
+
+<!-- Wallet Modal -->
+<div class="modal-overlay" id="wallet-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <h2 id="wallet-modal-title">Add Funds</h2>
+      <button class="modal-close" onclick="closeWalletModal()">&times;</button>
+    </div>
+    <div id="wallet-alert"></div>
+    <form id="wallet-form" novalidate>
+      <div class="form-group">
+        <label for="wallet-amount" id="wallet-amount-label">Amount (Rs.)</label>
+        <input type="number" id="wallet-amount" placeholder="0.00" min="1" step="0.01" />
+      </div>
+      <div style="display:flex; gap:8px; justify-content:flex-end; margin-top:8px;">
+        <button type="button" class="btn btn-secondary" onclick="closeWalletModal()">Cancel</button>
+        <button type="submit" class="btn btn-primary" id="wallet-submit-btn">Confirm</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Add Service Modal -->
+<div class="modal-overlay" id="service-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <h2>Add Service</h2>
+      <button class="modal-close" onclick="closeServiceModal()">&times;</button>
+    </div>
+    <div id="service-alert"></div>
+    <form id="service-form" novalidate>
+      <div class="form-group">
+        <label for="svc-title">Service title</label>
+        <input type="text" id="svc-title" placeholder="e.g. Logo Design" />
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label for="svc-category">Category</label>
+          <select id="svc-category"></select>
+        </div>
+        <div class="form-group">
+          <label for="svc-price">Starting price (Rs.)</label>
+          <input type="number" id="svc-price" placeholder="0.00" min="1" step="0.01" />
+        </div>
+      </div>
+      <div class="form-group">
+        <label for="svc-desc">Description</label>
+        <textarea id="svc-desc" rows="2" placeholder="Describe what you offer..."></textarea>
+      </div>
+      <div style="display:flex; gap:8px; justify-content:flex-end; margin-top:8px;">
+        <button type="button" class="btn btn-secondary" onclick="closeServiceModal()">Cancel</button>
+        <button type="submit" class="btn btn-primary" id="svc-submit-btn">Add Service</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<style>
+  .profile-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 28px;
+    flex-wrap: wrap;
+  }
+  .profile-name { font-size: 1.5rem; font-weight: 700; margin-bottom: 2px; }
+  .profile-meta { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 8px; }
+  .profile-meta-item { font-size: 0.8125rem; color: var(--text-secondary); }
+  .profile-stats { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 28px; }
+  .stat-box {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px 20px;
+    flex: 1;
+    min-width: 120px;
+  }
+  .stat-box .val { font-size: 1.25rem; font-weight: 700; color: var(--text); }
+  .stat-box .lbl { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); margin-top: 2px; }
+  .wallet-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .wallet-amount { font-size: 1.5rem; font-weight: 700; color: var(--text); }
+  .tab-nav { display: flex; gap: 0; border-bottom: 1px solid var(--border); margin-bottom: 24px; overflow-x: auto; }
+  .tab-btn {
+    padding: 10px 16px;
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: var(--text-secondary);
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: color var(--transition), border-color var(--transition);
+  }
+  .tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+  .tab-btn:hover:not(.active) { color: var(--text); }
+  .tab-panel { display: none; }
+  .tab-panel.active { display: block; }
+</style>
+
+<script src="/js/api.js"></script>
+<script>
+  requireAuth();
+  showAdminLink();
+
+  let profileData = null;
+  let walletMode = "topup";
+  let categories = [];
+
+  function esc(s) {
+    if (!s) return "";
+    return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+  }
+
+  async function loadCategories() {
+    categories = await apiFetch("/auth/categories") || [];
+    const sel = document.getElementById("svc-category");
+    sel.innerHTML = "";
+    categories.forEach(c => {
+      const o = document.createElement("option");
+      o.value = c.category_id;
+      o.textContent = c.category_name;
+      sel.appendChild(o);
+    });
+  }
+
+  async function loadProfile() {
+    try {
+      profileData = await apiFetch("/profile");
+      renderProfile(profileData);
+      document.getElementById("wallet-display").textContent =
+        `Wallet: Rs.${Number(profileData.user.wallet_balance).toFixed(2)}`;
+    } catch (err) {
+      document.getElementById("page-content").innerHTML =
+        `<div class="alert alert-error">${err.message}</div>`;
+    }
+  }
+
+  function renderProfile(d) {
+    const u = d.user;
+    const stats = d.stats;
+
+    const html = `
+      <div class="profile-header">
+        <div>
+          <div class="profile-name">${esc(u.name)}</div>
+          <div class="profile-meta">
+            <span class="profile-meta-item">${esc(u.email)}</span>
+            <span class="profile-meta-item">${esc(u.contact)}</span>
+            <span class="profile-meta-item">Joined ${formatDate(u.join_date)}</span>
+          </div>
+          <div style="margin-top:8px;">
+            ${stats.total_jobs > 0 ? starsHtml(stats.avg_rating) + ` <span class="text-sm text-muted" style="margin-left:4px;">${Number(stats.avg_rating).toFixed(1)} avg</span>` : '<span class="text-sm text-muted">No ratings yet</span>'}
+          </div>
+        </div>
+      </div>
+
+      <div class="profile-stats">
+        <div class="stat-box">
+          <div class="val">${formatCurrency(u.wallet_balance)}</div>
+          <div class="lbl">Wallet Balance</div>
+        </div>
+        <div class="stat-box">
+          <div class="val">${stats.total_jobs}</div>
+          <div class="lbl">Jobs Completed</div>
+        </div>
+        <div class="stat-box">
+          <div class="val">${formatCurrency(stats.total_earnings)}</div>
+          <div class="lbl">Total Earned</div>
+        </div>
+        <div class="stat-box">
+          <div class="val">${stats.avg_rating > 0 ? Number(stats.avg_rating).toFixed(1) : "-"}</div>
+          <div class="lbl">Avg Rating</div>
+        </div>
+      </div>
+
+      <!-- Wallet Controls -->
+      <div class="card" style="margin-bottom:24px;">
+        <div class="wallet-header">
+          <div>
+            <div class="font-semibold" style="margin-bottom:2px;">Wallet</div>
+            <div class="wallet-amount">${formatCurrency(u.wallet_balance)}</div>
+          </div>
+          <div style="display:flex; gap:8px;">
+            <button class="btn btn-primary btn-sm" onclick="openWalletModal('topup')">Add Funds</button>
+            <button class="btn btn-secondary btn-sm" onclick="openWalletModal('withdraw')">Withdraw</button>
+          </div>
+        </div>
+        ${d.transactions.length ? `
+          <hr class="divider" style="margin:16px 0 12px;">
+          <div class="section-title">Recent Transactions</div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Date</th><th>Type</th><th>Amount</th><th>Description</th></tr></thead>
+              <tbody>
+                ${d.transactions.map(t => `
+                  <tr>
+                    <td>${formatDate(t.txn_date)}</td>
+                    <td>${statusBadge(t.txn_type)}</td>
+                    <td style="font-weight:600;">${formatCurrency(t.amount)}</td>
+                    <td class="text-secondary">${esc(t.description || "-")}</td>
+                  </tr>
+                `).join("")}
+              </tbody>
+            </table>
+          </div>
+        ` : ""}
+      </div>
+
+      <!-- Tabs -->
+      <div class="tab-nav">
+        <button class="tab-btn active" onclick="switchTab('posted')">Posted Jobs (${d.posted_jobs.length})</button>
+        <button class="tab-btn" onclick="switchTab('applications')">My Applications (${d.applications.length})</button>
+        <button class="tab-btn" onclick="switchTab('contracts')">Active Contracts (${d.active_contracts.length})</button>
+        <button class="tab-btn" onclick="switchTab('completed')">Completed Work (${d.completed_work.length})</button>
+        <button class="tab-btn" onclick="switchTab('services')">Services (${d.services.length})</button>
+      </div>
+
+      <!-- Posted Jobs -->
+      <div class="tab-panel active" id="tab-posted">
+        ${!d.posted_jobs.length ? '<div class="empty-state">No jobs posted yet.</div>' :
+          `<div class="table-wrap"><table>
+            <thead><tr><th>Title</th><th>Category</th><th>Budget</th><th>Expected</th><th>Status</th><th>Apps</th><th></th></tr></thead>
+            <tbody>
+              ${d.posted_jobs.map(j => `
+                <tr>
+                  <td><a href="/job-detail.html?id=${j.job_id}">${esc(j.title)}</a></td>
+                  <td class="text-secondary">${esc(j.category_name || "-")}</td>
+                  <td style="font-weight:600;">${formatCurrency(j.budget)}</td>
+                  <td class="text-secondary">${formatDate(j.expected_date)}</td>
+                  <td>${statusBadge(j.status)}</td>
+                  <td class="text-secondary">${j.app_count}</td>
+                  <td>
+                    ${j.status === "open" && j.app_count === 0 ?
+                      `<button class="btn btn-danger btn-sm" onclick="cancelJob(${j.job_id})">Cancel</button>` :
+                      ""}
+                  </td>
+                </tr>
+              `).join("")}
+            </tbody>
+          </table></div>`
+        }
+      </div>
+
+      <!-- My Applications -->
+      <div class="tab-panel" id="tab-applications">
+        ${!d.applications.length ? '<div class="empty-state">No applications made yet.</div>' :
+          `<div class="table-wrap"><table>
+            <thead><tr><th>Job</th><th>Client</th><th>Budget</th><th>Your Price</th><th>Applied</th><th>Status</th></tr></thead>
+            <tbody>
+              ${d.applications.map(a => `
+                <tr>
+                  <td><a href="/job-detail.html?id=${a.job_id}">${esc(a.job_title)}</a></td>
+                  <td class="text-secondary">${esc(a.client_name)}</td>
+                  <td>${formatCurrency(a.budget)}</td>
+                  <td style="font-weight:600;">${formatCurrency(a.proposed_price)}</td>
+                  <td class="text-secondary">${formatDate(a.applied_date)}</td>
+                  <td>${statusBadge(a.status)}</td>
+                </tr>
+              `).join("")}
+            </tbody>
+          </table></div>`
+        }
+      </div>
+
+      <!-- Active Contracts -->
+      <div class="tab-panel" id="tab-contracts">
+        ${!d.active_contracts.length ? '<div class="empty-state">No active contracts.</div>' :
+          d.active_contracts.map(c => `
+            <div class="card" style="margin-bottom:12px;">
+              <div style="display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:8px;">
+                <div>
+                  <a href="/job-detail.html?id=${c.job_id}" class="font-semibold" style="color:var(--text);">${esc(c.job_title)}</a>
+                  <div class="text-sm text-muted" style="margin-top:2px;">Client: ${esc(c.client_name)}</div>
+                </div>
+                <div style="text-align:right;">
+                  ${statusBadge(c.status)}
+                  <div class="font-semibold" style="margin-top:4px;">${formatCurrency(c.agreed_price)}</div>
+                </div>
+              </div>
+              <div style="margin-top:12px;">
+                <a href="/job-detail.html?id=${c.job_id}" class="btn btn-primary btn-sm">
+                  ${c.status === "active" ? "Submit Work" : "View Contract"}
+                </a>
+              </div>
+            </div>
+          `).join("")
+        }
+      </div>
+
+      <!-- Completed Work -->
+      <div class="tab-panel" id="tab-completed">
+        ${!d.completed_work.length ? '<div class="empty-state">No completed work yet.</div>' :
+          d.completed_work.map(w => `
+            <div class="card" style="margin-bottom:12px;">
+              <div style="display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:8px;">
+                <div>
+                  <a href="/job-detail.html?id=${w.job_id}" class="font-semibold" style="color:var(--text);">${esc(w.job_title)}</a>
+                  <div class="text-sm text-muted">Client: ${esc(w.client_name)}</div>
+                  <div style="margin-top:6px;">
+                    ${w.rating_score ? starsHtml(w.rating_score) + ` <span class="text-sm text-muted">${w.rating_score}/5</span>` : '<span class="text-sm text-muted">Not rated</span>'}
+                  </div>
+                  ${w.review_text ? `<p class="text-sm" style="margin-top:6px; color:var(--text-secondary);">${esc(w.review_text)}</p>` : ""}
+                </div>
+                <div style="text-align:right;">
+                  <div class="font-semibold" style="color:var(--success);">${formatCurrency(w.earned)}</div>
+                  <div class="text-xs text-muted">earned</div>
+                  <div class="text-xs text-muted" style="margin-top:4px;">${formatDate(w.completion_date)}</div>
+                </div>
+              </div>
+            </div>
+          `).join("")
+        }
+      </div>
+
+      <!-- Services -->
+      <div class="tab-panel" id="tab-services">
+        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:16px;">
+          <span class="text-sm text-muted">${d.services.filter(s=>s.active_status==="Y").length}/2 active services</span>
+          <button class="btn btn-primary btn-sm" onclick="openServiceModal()">Add Service</button>
+        </div>
+        ${!d.services.length ? '<div class="empty-state">No services listed yet.</div>' :
+          d.services.map(s => `
+            <div class="card" style="margin-bottom:12px;">
+              <div style="display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:8px;">
+                <div>
+                  <div class="font-semibold">${esc(s.title)}</div>
+                  <div class="text-sm text-muted">${esc(s.category_name || "")} &middot; Starting at ${formatCurrency(s.base_price)}</div>
+                  ${s.description ? `<p class="text-sm" style="margin-top:6px; color:var(--text-secondary);">${esc(s.description)}</p>` : ""}
+                </div>
+                <div style="display:flex; align-items:center; gap:8px;">
+                  ${statusBadge(s.active_status === "Y" ? "active" : "cancelled")}
+                  ${s.active_status === "Y" ?
+                    `<button class="btn btn-secondary btn-sm" onclick="deactivateService(${s.service_id})">Deactivate</button>` :
+                    ""}
+                </div>
+              </div>
+            </div>
+          `).join("")
+        }
+      </div>
+    `;
+
+    document.getElementById("page-content").innerHTML = html;
+  }
+
+  // Tabs
+  function switchTab(name) {
+    document.querySelectorAll(".tab-btn").forEach((b, i) => {
+      const names = ["posted","applications","contracts","completed","services"];
+      b.classList.toggle("active", names[i] === name);
+    });
+    document.querySelectorAll(".tab-panel").forEach(p => {
+      p.classList.toggle("active", p.id === `tab-${name}`);
+    });
+  }
+
+  // Wallet modal
+  function openWalletModal(mode) {
+    walletMode = mode;
+    document.getElementById("wallet-modal-title").textContent = mode === "topup" ? "Add Funds" : "Withdraw Funds";
+    document.getElementById("wallet-amount-label").textContent = mode === "topup" ? "Amount to add (Rs.)" : "Amount to withdraw (Rs.)";
+    document.getElementById("wallet-submit-btn").textContent = mode === "topup" ? "Add Funds" : "Withdraw";
+    document.getElementById("wallet-amount").value = "";
+    clearAlert(document.getElementById("wallet-alert"));
+    document.getElementById("wallet-modal").classList.add("open");
+  }
+  function closeWalletModal() {
+    document.getElementById("wallet-modal").classList.remove("open");
+  }
+
+  document.getElementById("wallet-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const walletAlert = document.getElementById("wallet-alert");
+    clearAlert(walletAlert);
+    const amount = parseFloat(document.getElementById("wallet-amount").value);
+    if (!amount || amount <= 0) { showAlert(walletAlert, "Amount must be a positive number."); return; }
+    const btn = document.getElementById("wallet-submit-btn");
+    const origLabel = btn.textContent;
+    setLoading(btn, true);
+    try {
+      const endpoint = walletMode === "topup" ? "/wallet/topup" : "/wallet/withdraw";
+      const res = await apiFetch(endpoint, { method: "POST", body: JSON.stringify({ amount }) });
+      closeWalletModal();
+      showAlert(document.getElementById("global-alert"), res.message, "success");
+      setTimeout(() => clearAlert(document.getElementById("global-alert")), 3000);
+      await loadProfile();
+    } catch (err) {
+      showAlert(walletAlert, err.message);
+    } finally {
+      setLoading(btn, false, origLabel);
+    }
+  });
+
+  // Service modal
+  function openServiceModal() {
+    clearAlert(document.getElementById("service-alert"));
+    document.getElementById("service-form").reset();
+    document.getElementById("service-modal").classList.add("open");
+  }
+  function closeServiceModal() {
+    document.getElementById("service-modal").classList.remove("open");
+  }
+
+  document.getElementById("service-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const svcAlert = document.getElementById("service-alert");
+    clearAlert(svcAlert);
+    const title = document.getElementById("svc-title").value.trim();
+    const category_id = parseInt(document.getElementById("svc-category").value);
+    const base_price = parseFloat(document.getElementById("svc-price").value);
+    const description = document.getElementById("svc-desc").value.trim();
+    if (!title) { showAlert(svcAlert, "Service title is required."); return; }
+    if (!base_price || base_price <= 0) { showAlert(svcAlert, "Base price must be greater than zero."); return; }
+    const btn = document.getElementById("svc-submit-btn");
+    setLoading(btn, true);
+    try {
+      await apiFetch("/services", { method: "POST", body: JSON.stringify({ title, category_id, base_price, description }) });
+      closeServiceModal();
+      showAlert(document.getElementById("global-alert"), "Service added.", "success");
+      setTimeout(() => clearAlert(document.getElementById("global-alert")), 3000);
+      await loadProfile();
+    } catch (err) {
+      showAlert(svcAlert, err.message);
+    } finally {
+      setLoading(btn, false, "Add Service");
+    }
+  });
+
+  async function deactivateService(id) {
+    if (!confirm("Deactivate this service?")) return;
+    try {
+      await apiFetch(`/services/${id}/deactivate`, { method: "PUT" });
+      await loadProfile();
+    } catch (err) {
+      showAlert(document.getElementById("global-alert"), err.message);
+    }
+  }
+
+  async function cancelJob(id) {
+    if (!confirm("Cancel this job? This cannot be undone.")) return;
+    try {
+      await apiFetch(`/jobs/${id}`, { method: "DELETE" });
+      showAlert(document.getElementById("global-alert"), "Job cancelled.", "success");
+      setTimeout(() => clearAlert(document.getElementById("global-alert")), 3000);
+      await loadProfile();
+    } catch (err) {
+      showAlert(document.getElementById("global-alert"), err.message);
+    }
+  }
+
+  // Close modals on backdrop click
+  ["wallet-modal","service-modal"].forEach(id => {
+    document.getElementById(id).addEventListener("click", e => {
+      if (e.target.id === id) e.target.classList.remove("open");
+    });
+  });
+
+  // Init
+  (async () => {
+    await loadCategories();
+    await loadProfile();
+  })();
+</script>
+</body>
+</html>
